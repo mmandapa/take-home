@@ -1,83 +1,106 @@
 # SWE Harbor Take-Home Assignment
 
-## What Is This?
+## Codebase Landscape
 
-[Verifiers](https://github.com/PrimeIntellect-ai/verifiers) is a framework for training and evaluating AI coding agents — models that can read code, run commands, and write solutions inside a terminal. To measure how good these agents are, we need **benchmarks**: coding challenges that an AI agent attempts to solve inside a Docker container.
+This repository is a fork of [Verifiers](https://github.com/PrimeIntellect-ai/verifiers), a framework by Prime Intellect for training and evaluating AI coding agents with reinforcement learning. The top-level structure:
 
-That's where **Harbor tasks** come in. Each Harbor task is a self-contained coding challenge with:
+```
+take-home/
+├── verifiers/              # The core Verifiers framework (library code — don't modify)
+│   ├── envs/               # Built-in environment types (SingleTurnEnv, HarborEnv, etc.)
+│   ├── rubrics/            # Reward/scoring infrastructure
+│   ├── rl/                 # Reinforcement learning trainers
+│   └── ...
+├── environments/
+│   └── swe_harbor/         # ← YOUR WORKING DIRECTORY
+│       ├── swe_harbor.py   # Environment class that loads and runs tasks
+│       ├── pyproject.toml  # Project config and dependencies
+│       ├── RUBRIC.md       # How your work will be evaluated
+│       └── tasks/          # ← Where you create tasks
+│           ├── _template/              # Starter template to copy
+│           ├── implement-linked-list/  # Example: greenfield implementation
+│           ├── fix-flask-api/          # Example: debug existing code
+│           └── implement-text-stats/   # Example: text analysis task
+└── README.md               # Top-level Verifiers docs
+```
 
-- A problem statement (what the agent sees)
-- A Docker environment (where the agent works)
-- Automated tests (how we check the answer)
-- A reference solution (proof the task is solvable)
+You only need to work inside `environments/swe_harbor/tasks/`. Everything else is supporting infrastructure.
 
-The framework loads a task, spins up a Docker container, hands the agent the problem statement, and once the agent finishes, runs the tests. The result is a reward: **1** for pass, **0** for fail.
+## The Environment
 
-**Your job is to design the challenges and write the tests.** You're building the evaluation, not the agent. The tasks you create will be used to measure how good AI agents are at real software engineering work.
+**SweHarborEnv** (`swe_harbor.py`) is a Harbor-format environment that evaluates AI coding agents. Here's what happens when a task runs:
 
-## Your Deliverables
+1. The framework reads `task.toml` to get the Docker image and timeout settings.
+2. It builds and starts a Docker container from `environment/Dockerfile`.
+3. The task instruction (`instruction.md`) is mounted at `/task/instruction.md` inside the container.
+4. A tool-use agent script is uploaded into the container. The agent has four tools: `bash`, `read_file`, `write_file`, and `str_replace`. It reads the instruction and works to solve the task.
+5. When the agent finishes (or times out), `tests/test.sh` runs inside the container.
+6. The test runner executes `test_solution.py` with pytest and writes a reward — `1` (all tests pass) or `0` (any test fails) — to `/logs/verifier/reward.txt`.
+
+The agent never sees the tests. It only sees `instruction.md`.
+
+## Your Task
 
 Create **1-2 original software engineering tasks** in Harbor format. Place each task in its own directory under `tasks/`.
 
-Each task directory must contain these five files:
+Each task directory must contain these files:
 
 | File | Purpose |
 |------|---------|
-| `task.toml` | Task metadata — difficulty level, timeouts, which Docker image to use |
-| `instruction.md` | The problem statement the agent sees — what to build, fix, or implement |
-| `environment/Dockerfile` | Sets up the Docker container with any starter code or dependencies |
-| `solution/solve.sh` | Your reference solution — a bash script that produces the correct answer |
-| `tests/test_solution.py` | Pytest test cases that verify the solution is correct |
-| `tests/test.sh` | Test runner that executes the tests and writes the reward file |
-
-You may also include a brief `NOTES.md` explaining your design choices.
+| `task.toml` | Task metadata — difficulty level, timeouts, Docker image |
+| `instruction.md` | The problem statement the agent sees |
+| `environment/Dockerfile` | Sets up the Docker container (and any starter code) |
+| `solution/solve.sh` | Reference solution — a bash script that produces the correct answer |
+| `tests/test_solution.py` | Pytest test cases that verify correctness |
+| `tests/test.sh` | Test runner that executes pytest and writes the reward file |
 
 **Requirements:**
 
 1. The reference solution (`solve.sh`) must pass all tests (reward = 1)
-2. Tests must **fail** without the solution applied (reward = 0) — if tests pass on the bare environment, they aren't testing anything useful
-3. Tests should catch incorrect or incomplete solutions, not just verify the happy path
-4. At least one task should involve **multiple files** (e.g., fixing a bug across modules, implementing a small system with interacting components)
+2. Tests must **fail** without the solution applied (reward = 0)
+3. Tests should catch incorrect or incomplete solutions, not just the happy path
+4. At least one task should involve **multiple files**
 
-## What Makes a Good Task
+See `RUBRIC.md` for the full evaluation criteria.
 
-### Good Task Types
+### Getting Started
 
-| Type | Example | Why It's Good |
-|------|---------|---------------|
-| **Debug existing code** | Plant realistic bugs in a working Flask app — a wrong query, an off-by-one in pagination, a missing error handler | Tests code reading + reasoning, not just writing from scratch |
-| **Implement from a spec** | Give a detailed interface spec for a caching layer, agent writes the implementation | Tests whether the agent can translate requirements to working code |
-| **Build a small tool** | Write a CLI tool that processes CSV files and outputs summary statistics | Tests end-to-end engineering: argument parsing, file I/O, output formatting |
-| **Fix a broken config/setup** | A Dockerfile with wrong dependency versions, a misconfigured server, a broken build script | Tests practical devops and troubleshooting skills |
-| **Refactor for correctness** | Code that works for common cases but has subtle bugs under edge cases (concurrency, large input, special characters) | Tests careful code analysis and attention to detail |
+1. **Study the examples** — `tasks/implement-linked-list/` (greenfield), `tasks/fix-flask-api/` (debugging), and `tasks/implement-text-stats/` (text analysis)
+2. **Copy the template** — `cp -r tasks/_template tasks/your-task-name`
+3. **Fill in each file** — follow the TODO comments in the template
+4. **Test locally** — verify your task end-to-end with Docker (see below)
 
-### What Makes Tasks Good for AI Evaluation
+### Task Design Guidelines
 
-- **Solvable entirely in a terminal** — no GUI, no browser, no human interaction needed
-- **Clear pass/fail** — tests can deterministically verify the answer
-- **Requires reading and understanding existing code**, not just greenfield writing
-- **Has a single correct behavior** — not subjective or style-based
-- **Multiple files encouraged** — real code lives across files, and navigating a codebase is a key skill to evaluate
-- **Scope**: A skilled engineer should be able to solve each task in **15–45 minutes**
+**Good task types:**
 
-### Anti-Patterns to Avoid
+| Type | Example |
+|------|---------|
+| Debug existing code | Plant realistic bugs in a working app |
+| Implement from a spec | Give interface requirements, agent writes the code |
+| Build a small tool | CLI tool with argument parsing, file I/O, output formatting |
+| Fix broken config/setup | Wrong dependency versions, misconfigured server |
+| Refactor for correctness | Code with subtle edge-case bugs |
 
-- **Leetcode / competitive programming puzzles** — these test algorithm knowledge, not software engineering
-- **Tasks requiring internet access or external APIs** — the Docker container is isolated
-- **Subjective tasks** (e.g., "make this code more readable") — no deterministic pass/fail
-- **Trivially passable tests** — if the tests can pass without actually solving the problem, the task is useless for evaluation
-- **Overly broad tasks** — "build a web app" is too vague; scope it down to something specific and testable
+**Avoid:**
 
-## Getting Started
+- Leetcode/competitive programming puzzles
+- Tasks requiring internet access (containers are isolated)
+- Subjective tasks with no deterministic pass/fail
+- Trivially passable tests
+- Overly broad scope ("build a web app")
 
-1. **Study the examples**: Look at `tasks/implement-linked-list/` and `tasks/fix-flask-api/` to understand the format
-2. **Copy the template**: `cp -r tasks/_template tasks/your-task-name`
-3. **Fill in each file**: Follow the TODO comments in the template
-4. **Test locally**: Use Docker to verify your task works end-to-end (see [Testing Locally](#testing-locally))
+**Scope:** A skilled engineer should be able to solve each task in 15-45 minutes.
 
-## Testing Locally
+## Running the Environment
 
-You need to verify two things: (1) your solution passes the tests, and (2) the tests fail without your solution.
+### Prerequisites
+
+- **Docker** — must be installed and running
+
+### Quick Verification (Docker Only)
+
+The fastest way to test a task. Run these commands from the `environments/swe_harbor/` directory.
 
 **Step 1: Build the Docker image**
 
@@ -85,7 +108,7 @@ You need to verify two things: (1) your solution passes the tests, and (2) the t
 docker build -t my-task tasks/my-task-name/environment/
 ```
 
-**Step 2: Run with your solution and verify tests pass (reward should be `1`)**
+**Step 2: Run with your solution (expect reward = `1`)**
 
 ```bash
 docker run --rm \
@@ -95,7 +118,7 @@ docker run --rm \
     bash -c "mkdir -p /logs/verifier && cd /app && bash /solution/solve.sh && bash /tests/test.sh && cat /logs/verifier/reward.txt"
 ```
 
-**Step 3: Run without your solution and verify tests fail (reward should be `0`)**
+**Step 3: Run without your solution (expect reward = `0`)**
 
 ```bash
 docker run --rm \
@@ -104,13 +127,51 @@ docker run --rm \
     bash -c "mkdir -p /logs/verifier && bash /tests/test.sh && cat /logs/verifier/reward.txt"
 ```
 
-If Step 2 prints `1` and Step 3 prints `0`, your task is working correctly. If both print `1`, your tests aren't actually checking the solution — go back and strengthen them.
+If Step 2 prints `1` and Step 3 prints `0`, your task works correctly. If both print `1`, your tests aren't actually checking the solution.
+
+**Concrete example** using the included `implement-text-stats` task:
+
+```bash
+# Build
+docker build -t text-stats tasks/implement-text-stats/environment/
+
+# With solution (should print 1)
+docker run --rm \
+    -v $(pwd)/tasks/implement-text-stats/solution:/solution \
+    -v $(pwd)/tasks/implement-text-stats/tests:/tests \
+    text-stats \
+    bash -c "mkdir -p /logs/verifier && cd /app && bash /solution/solve.sh && bash /tests/test.sh && cat /logs/verifier/reward.txt"
+
+# Without solution (should print 0)
+docker run --rm \
+    -v $(pwd)/tasks/implement-text-stats/tests:/tests \
+    text-stats \
+    bash -c "mkdir -p /logs/verifier && bash /tests/test.sh && cat /logs/verifier/reward.txt"
+```
+
+### Full Framework Run (Optional)
+
+To run tasks through the full Verifiers pipeline with an actual AI agent, you need additional setup.
+
+**Install dependencies:**
+
+```bash
+# From the repo root
+uv add verifiers
+prime env install swe_harbor --path ./environments/swe_harbor
+```
+
+**Run an evaluation:**
+
+```bash
+prime eval run swe_harbor -m gpt-4
+```
+
+This spins up the full agent loop: the model reads `instruction.md`, uses its tools to solve the task, and then tests are run automatically. You need a configured API endpoint (see `configs/endpoints.toml` at the repo root).
 
 ## Harbor Format Reference
 
 ### `task.toml`
-
-Metadata about the task:
 
 ```toml
 version = "1.0"
@@ -143,7 +204,7 @@ The problem statement the agent receives. Be specific about:
 
 ### `environment/Dockerfile`
 
-Sets up the Docker container. For simple tasks:
+Sets up the Docker container. For greenfield tasks:
 
 ```dockerfile
 FROM python:3.11-slim
@@ -161,13 +222,7 @@ COPY app/ /app/
 
 ### `solution/solve.sh`
 
-A bash script that produces the correct solution. This runs inside the container at `/app`. It can:
-
-- Write files directly (using heredocs or `cat`)
-- Apply patches with `sed` or `patch`
-- Run commands to generate output
-
-The solution must be deterministic and pass all tests.
+A bash script that produces the correct solution. Runs inside the container at `/app`. It can write files (using heredocs), apply patches (with `sed` or `patch`), or run commands. Must be deterministic and pass all tests.
 
 ### `tests/test.sh`
 
@@ -176,11 +231,9 @@ Entry point for test execution. Standard pattern:
 ```bash
 #!/bin/bash
 cd /app
-
 pip install pytest > /dev/null 2>&1
-
+mkdir -p /logs/verifier
 pytest /tests/test_solution.py -v 2>&1
-
 if [ $? -eq 0 ]; then
     echo 1 > /logs/verifier/reward.txt
 else
@@ -188,14 +241,8 @@ else
 fi
 ```
 
-The script must write `1` (pass) or `0` (fail) to `/logs/verifier/reward.txt`.
+Must write `1` (pass) or `0` (fail) to `/logs/verifier/reward.txt`.
 
 ### `tests/test_solution.py`
 
-Standard pytest test file. Tips:
-
-- Use descriptive test names and assertion messages
-- Test the happy path, edge cases, and error conditions
-- Keep tests independent (no shared mutable state)
-
-Good luck!
+Standard pytest test file. Test the happy path, edge cases, and error conditions. Keep tests independent with no shared mutable state.
