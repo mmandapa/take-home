@@ -5,7 +5,7 @@ author_name = "Maharshi Mandapati"
 author_email = "maharshi.mandapati@gmail.com"
 difficulty = "medium"
 category = "programming"
-tags = ["python", "django", "rest-api", "models", "feature-addition", "multi-file"]
+tags = ["python", "django", "rest-api", "models", "multi-file", "event-log"]
 
 [verifier]
 timeout_sec = 180.0
