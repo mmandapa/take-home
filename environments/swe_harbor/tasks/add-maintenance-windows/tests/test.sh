@@ -1,8 +1,6 @@
 #!/bin/bash
 cd /app
 
-pip install pytest > /dev/null 2>&1
-
 mkdir -p /logs/verifier
 
 # Run migrations in case the solution created new ones

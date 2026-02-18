@@ -31,6 +31,11 @@ class CheckPauseReasonModelTestCase(BaseTestCase):
         self.assertIn("pause_reason", d)
         self.assertEqual(d["pause_reason"], "")
 
+    def test_to_dict_pause_reason_always_string(self):
+        d = self.check.to_dict()
+        self.assertIn("pause_reason", d)
+        self.assertIsInstance(d["pause_reason"], str)
+
 
 class PauseWithReasonApiTestCase(BaseTestCase):
     """Tests for POST /api/v3/checks/<code>/pause with reason."""
@@ -120,6 +125,29 @@ class PauseWithReasonApiTestCase(BaseTestCase):
         self.assertEqual(r2.status_code, 200)
         self.assertEqual(r2.json()["pause_reason"], "Updated reason")
 
+    def test_pause_wrong_api_key(self):
+        r = self.post({"reason": "nope"}, api_key="Y" * 32)
+        self.assertEqual(r.status_code, 401)
+
+    def test_pause_response_shape_includes_pause_reason(self):
+        r = self.post({"reason": "Test"})
+        self.assertEqual(r.status_code, 200)
+        doc = r.json()
+        self.assertIn("pause_reason", doc)
+        self.assertIn("status", doc)
+        self.assertIn("uuid", doc)
+        self.assertEqual(doc["pause_reason"], "Test")
+
+    def test_pause_reason_unicode(self):
+        r = self.post({"reason": "Holiday 日本"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["pause_reason"], "Holiday 日本")
+
+    def test_pause_reason_whitespace_only(self):
+        r = self.post({"reason": "   "})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["pause_reason"], "   ")
+
 
 class ResumeClearsReasonTestCase(BaseTestCase):
     """Tests that resume clears pause_reason."""
@@ -171,6 +199,77 @@ class ResumeClearsReasonTestCase(BaseTestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("pause_reason", r.json())
         self.assertEqual(r.json()["pause_reason"], "")
+
+    def test_resume_wrong_api_key(self):
+        self.client.post(
+            self.pause_url,
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        r = self.client.post(
+            self.resume_url,
+            json.dumps({"api_key": "Y" * 32}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 401)
+
+    def test_resume_wrong_project(self):
+        other = Check.objects.create(project=self.bobs_project, name="Other")
+        self.client.post(
+            f"/api/v3/checks/{other.code}/pause",
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        url = f"/api/v3/checks/{other.code}/resume"
+        r = self.client.post(
+            url,
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 403)
+
+    def test_resume_nonexistent_check(self):
+        url = f"/api/v3/checks/{uuid.uuid4()}/resume"
+        r = self.client.post(
+            url,
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_resume_clears_reason_response_shape(self):
+        self.client.post(
+            self.pause_url,
+            json.dumps({"reason": "Before", "api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        r = self.client.post(
+            self.resume_url,
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 200)
+        doc = r.json()
+        self.assertIn("pause_reason", doc)
+        self.assertEqual(doc["pause_reason"], "")
+
+    def test_double_resume_second_409(self):
+        self.client.post(
+            self.pause_url,
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        self.client.post(
+            self.resume_url,
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        r = self.client.post(
+            self.resume_url,
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 409)
 
 
 class CheckToDictPauseReasonTestCase(BaseTestCase):
@@ -245,3 +344,25 @@ class PauseResumeUrlRoutingTestCase(BaseTestCase):
         )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["pause_reason"], "")
+
+    def test_resume_v1_v2(self):
+        self.client.post(
+            f"/api/v3/checks/{self.check.code}/pause",
+            json.dumps({"api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        for version in ("v1", "v2"):
+            url = f"/api/{version}/checks/{self.check.code}/resume"
+            r = self.client.post(
+                url,
+                json.dumps({"api_key": "X" * 32}),
+                content_type="application/json",
+            )
+            self.assertEqual(r.status_code, 200, f"resume {version}")
+            self.assertEqual(r.json()["pause_reason"], "", f"resume {version}")
+            if version == "v1":
+                self.client.post(
+                    f"/api/v3/checks/{self.check.code}/pause",
+                    json.dumps({"api_key": "X" * 32}),
+                    content_type="application/json",
+                )

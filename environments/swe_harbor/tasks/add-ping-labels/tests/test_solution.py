@@ -39,6 +39,13 @@ class PingLabelModelTestCase(BaseTestCase):
         self.assertIn("uuid", d)
         self.assertEqual(d["name"], "health")
 
+    def test_to_dict_uuid_is_string(self):
+        from hc.api.models import PingLabel
+        lb = PingLabel.objects.create(owner=self.check, name="deploy")
+        d = lb.to_dict()
+        self.assertIsInstance(d["uuid"], str)
+        uuid.UUID(d["uuid"])
+
     def test_ordering(self):
         from hc.api.models import PingLabel
         PingLabel.objects.create(owner=self.check, name="zebra")
@@ -123,6 +130,46 @@ class CreateLabelApiTestCase(BaseTestCase):
         )
         self.assertEqual(r.status_code, 404)
 
+    def test_post_wrong_api_key(self):
+        r = self.post({"name": "deploy"}, api_key="Y" * 32)
+        self.assertEqual(r.status_code, 401)
+
+    def test_name_exactly_100_chars_succeeds(self):
+        r = self.post({"name": "x" * 100})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(len(r.json()["name"]), 100)
+
+    def test_name_not_string(self):
+        r = self.client.post(
+            self.url,
+            json.dumps({"name": 123, "api_key": "X" * 32}),
+            content_type="application/json",
+        )
+        self.assertEqual(r.status_code, 400)
+        err = r.json().get("error", "").lower()
+        self.assertTrue("name" in err or "string" in err)
+
+    def test_empty_string_name(self):
+        r = self.post({"name": ""})
+        self.assertEqual(r.status_code, 400)
+
+    def test_create_response_has_uuid_and_name(self):
+        r = self.post({"name": "deploy"})
+        self.assertEqual(r.status_code, 201)
+        doc = r.json()
+        self.assertIn("uuid", doc)
+        self.assertIn("name", doc)
+        self.assertIsInstance(doc["uuid"], str)
+        self.assertIsInstance(doc["name"], str)
+        self.assertEqual(doc["name"], "deploy")
+
+    def test_duplicate_name_error_message(self):
+        self.post({"name": "deploy"})
+        r = self.post({"name": "deploy"})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("error", r.json())
+        self.assertIn("already", r.json()["error"].lower())
+
 
 class ListLabelsApiTestCase(BaseTestCase):
     """Tests for GET /api/v3/checks/<code>/labels/"""
@@ -161,6 +208,40 @@ class ListLabelsApiTestCase(BaseTestCase):
         url = f"/api/v3/checks/{uuid.uuid4()}/labels/"
         r = self.client.get(url, HTTP_X_API_KEY="X" * 32)
         self.assertEqual(r.status_code, 404)
+
+    def test_get_wrong_project(self):
+        other = Check.objects.create(project=self.bobs_project, name="Other")
+        url = f"/api/v3/checks/{other.code}/labels/"
+        r = self.client.get(url, HTTP_X_API_KEY="X" * 32)
+        self.assertEqual(r.status_code, 403)
+
+    def test_list_ordering_by_name(self):
+        from hc.api.models import PingLabel
+        PingLabel.objects.create(owner=self.check, name="zebra")
+        PingLabel.objects.create(owner=self.check, name="alpha")
+        PingLabel.objects.create(owner=self.check, name="middle")
+        r = self.get()
+        self.assertEqual(r.status_code, 200)
+        names = [lb["name"] for lb in r.json()["labels"]]
+        self.assertEqual(names, ["alpha", "middle", "zebra"])
+
+    def test_list_only_this_check_labels(self):
+        from hc.api.models import PingLabel
+        other_check = Check.objects.create(project=self.bobs_project, name="Other")
+        PingLabel.objects.create(owner=self.check, name="mine")
+        PingLabel.objects.create(owner=other_check, name="theirs")
+        r = self.get()
+        self.assertEqual(r.status_code, 200)
+        labels = r.json()["labels"]
+        self.assertEqual(len(labels), 1)
+        self.assertEqual(labels[0]["name"], "mine")
+
+    def test_list_empty_response_shape(self):
+        r = self.get()
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertIn("labels", data)
+        self.assertEqual(data["labels"], [])
 
 
 class PingWithLabelTestCase(BaseTestCase):
@@ -203,6 +284,17 @@ class PingWithLabelTestCase(BaseTestCase):
         self.assertEqual(len(pings), 1)
         self.assertIsNone(pings[0].get("label"))
 
+    def test_ping_label_in_list_matches_created(self):
+        from hc.api.models import PingLabel
+        PingLabel.objects.create(owner=self.check, name="production")
+        url = f"/ping/{self.check.code}/?label=production"
+        self.client.get(url)
+        list_url = f"/api/v3/checks/{self.check.code}/pings/"
+        r = self.client.get(list_url, HTTP_X_API_KEY="X" * 32)
+        pings = r.json()["pings"]
+        self.assertEqual(len(pings), 1)
+        self.assertEqual(pings[0]["label"], "production")
+
 
 class LabelsUrlRoutingTestCase(BaseTestCase):
     """Tests for URL routing (v1/v2/v3)."""
@@ -231,3 +323,11 @@ class LabelsUrlRoutingTestCase(BaseTestCase):
         r = self.client.options(url)
         self.assertEqual(r.status_code, 204)
         self.assertEqual(r["Access-Control-Allow-Origin"], "*")
+
+    def test_options_allow_methods(self):
+        url = f"/api/v3/checks/{self.check.code}/labels/"
+        r = self.client.options(url)
+        self.assertEqual(r.status_code, 204)
+        allow_methods = r.get("Access-Control-Allow-Methods", "")
+        self.assertIn("GET", allow_methods)
+        self.assertIn("POST", allow_methods)

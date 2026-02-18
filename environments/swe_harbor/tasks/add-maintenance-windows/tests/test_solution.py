@@ -47,6 +47,30 @@ class MaintenanceWindowModelTestCase(BaseTestCase):
         self.assertIn("end", d)
         self.assertEqual(d["reason"], "Upgrade")
 
+    def test_to_dict_end_none_when_not_set(self):
+        from hc.api.models import MaintenanceWindow
+        start = datetime(2025, 2, 1, 14, 0, 0, tzinfo=timezone.utc)
+        w = MaintenanceWindow.objects.create(owner=self.check, start=start, reason="No end")
+        d = w.to_dict()
+        self.assertIsNone(d["end"])
+
+    def test_to_dict_iso8601_no_microseconds(self):
+        from hc.api.models import MaintenanceWindow
+        start = datetime(2025, 2, 1, 14, 0, 0, tzinfo=timezone.utc)
+        end = datetime(2025, 2, 1, 16, 0, 0, tzinfo=timezone.utc)
+        w = MaintenanceWindow.objects.create(owner=self.check, start=start, end=end, reason="")
+        d = w.to_dict()
+        self.assertNotIn(".", d["start"], "start must be ISO 8601 without microseconds")
+        self.assertNotIn(".", d["end"], "end must be ISO 8601 without microseconds")
+
+    def test_to_dict_uuid_is_string(self):
+        from hc.api.models import MaintenanceWindow
+        start = datetime(2025, 2, 1, 14, 0, 0, tzinfo=timezone.utc)
+        w = MaintenanceWindow.objects.create(owner=self.check, start=start, reason="")
+        d = w.to_dict()
+        self.assertIsInstance(d["uuid"], str)
+        uuid.UUID(d["uuid"])
+
     def test_ordering(self):
         from hc.api.models import MaintenanceWindow
         start1 = datetime(2025, 2, 1, 10, 0, 0, tzinfo=timezone.utc)
@@ -139,6 +163,38 @@ class CreateMaintenanceWindowApiTestCase(BaseTestCase):
         )
         self.assertEqual(r.status_code, 404)
 
+    def test_post_wrong_api_key(self):
+        r = self.post({"start": "2025-02-01T14:00:00+00:00", "reason": "Upgrade"}, api_key="Y" * 32)
+        self.assertEqual(r.status_code, 401)
+
+    def test_reason_not_string(self):
+        r = self.post({"start": "2025-02-01T14:00:00+00:00", "reason": 123})
+        self.assertEqual(r.status_code, 400)
+        err = r.json().get("error", "").lower()
+        self.assertIn("reason", err)
+        self.assertIn("string", err)
+
+    def test_invalid_end(self):
+        r = self.post({
+            "start": "2025-02-01T14:00:00+00:00",
+            "end": "not-a-datetime",
+        })
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("end", r.json().get("error", "").lower())
+
+    def test_reason_max_length_ok(self):
+        r = self.post({"start": "2025-02-01T14:00:00+00:00", "reason": "x" * 200})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(len(r.json()["reason"]), 200)
+
+    def test_end_equals_start_succeeds(self):
+        r = self.post({
+            "start": "2025-02-01T14:00:00+00:00",
+            "end": "2025-02-01T14:00:00+00:00",
+        })
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["start"], r.json()["end"])
+
 
 class ListMaintenanceWindowsApiTestCase(BaseTestCase):
     """Tests for GET /api/v3/checks/<code>/maintenance/"""
@@ -176,6 +232,37 @@ class ListMaintenanceWindowsApiTestCase(BaseTestCase):
         r = self.client.get(url, HTTP_X_API_KEY="X" * 32)
         self.assertEqual(r.status_code, 404)
 
+    def test_get_wrong_project(self):
+        other = Check.objects.create(project=self.bobs_project, name="Other")
+        url = f"/api/v3/checks/{other.code}/maintenance/"
+        r = self.client.get(url, HTTP_X_API_KEY="X" * 32)
+        self.assertEqual(r.status_code, 403)
+
+    def test_list_ordering_newest_first(self):
+        from hc.api.models import MaintenanceWindow
+        start1 = datetime(2025, 2, 1, 10, 0, 0, tzinfo=timezone.utc)
+        start2 = datetime(2025, 2, 1, 14, 0, 0, tzinfo=timezone.utc)
+        MaintenanceWindow.objects.create(owner=self.check, start=start1, reason="First")
+        MaintenanceWindow.objects.create(owner=self.check, start=start2, reason="Second")
+        r = self.get()
+        self.assertEqual(r.status_code, 200)
+        windows = r.json()["maintenance_windows"]
+        self.assertEqual(len(windows), 2)
+        self.assertEqual(windows[0]["reason"], "Second")
+        self.assertEqual(windows[1]["reason"], "First")
+
+    def test_list_only_this_check_windows(self):
+        from hc.api.models import MaintenanceWindow
+        other_check = Check.objects.create(project=self.bobs_project, name="Other")
+        start = datetime(2025, 2, 1, 14, 0, 0, tzinfo=timezone.utc)
+        MaintenanceWindow.objects.create(owner=self.check, start=start, reason="Mine")
+        MaintenanceWindow.objects.create(owner=other_check, start=start, reason="Theirs")
+        r = self.get()
+        self.assertEqual(r.status_code, 200)
+        windows = r.json()["maintenance_windows"]
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0]["reason"], "Mine")
+
 
 class CheckToDictMaintenanceWindowsTestCase(BaseTestCase):
     """Tests for maintenance_windows_count in Check.to_dict()."""
@@ -196,6 +283,17 @@ class CheckToDictMaintenanceWindowsTestCase(BaseTestCase):
         MaintenanceWindow.objects.create(owner=self.check, start=start, reason="B")
         d = self.check.to_dict()
         self.assertEqual(d["maintenance_windows_count"], 2)
+
+    def test_count_after_delete(self):
+        from hc.api.models import MaintenanceWindow
+        start = datetime(2025, 2, 1, 14, 0, 0, tzinfo=timezone.utc)
+        w1 = MaintenanceWindow.objects.create(owner=self.check, start=start, reason="One")
+        MaintenanceWindow.objects.create(owner=self.check, start=start, reason="Two")
+        d = self.check.to_dict()
+        self.assertEqual(d["maintenance_windows_count"], 2)
+        w1.delete()
+        d = self.check.to_dict()
+        self.assertEqual(d["maintenance_windows_count"], 1)
 
 
 class MaintenanceWindowUrlRoutingTestCase(BaseTestCase):
@@ -225,3 +323,11 @@ class MaintenanceWindowUrlRoutingTestCase(BaseTestCase):
         r = self.client.options(url)
         self.assertEqual(r.status_code, 204)
         self.assertEqual(r["Access-Control-Allow-Origin"], "*")
+
+    def test_options_allow_methods(self):
+        url = f"/api/v3/checks/{self.check.code}/maintenance/"
+        r = self.client.options(url)
+        self.assertEqual(r.status_code, 204)
+        allow_methods = r.get("Access-Control-Allow-Methods", "")
+        self.assertIn("GET", allow_methods)
+        self.assertIn("POST", allow_methods)

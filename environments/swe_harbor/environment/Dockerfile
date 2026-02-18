@@ -10,5 +10,6 @@ RUN apt-get update && \
 COPY app/ /app/
 
 RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir pytest && \
     python manage.py migrate --run-syncdb && \
     python manage.py compress --force 2>/dev/null || true
